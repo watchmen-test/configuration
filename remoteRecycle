@@ -1,0 +1,99 @@
+# Load IIS module:
+Import-Module WebAdministration
+# Set a name of the site we want to recycle the pool for:
+$site = "Default Web Site"
+# Get pool name by the site name:
+$pool = (Get-Item "IIS:\Sites\$site"| Select-Object applicationPool).applicationPool
+# Recycle the application pool:
+Restart-WebAppPool $pool
+
+######## or ########
+
+[CmdletBinding()]
+    param
+    (
+        [Parameter(Position = 1, Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [String] $ServerName,
+ 
+        [Parameter(Position = 2, Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [String] $ApplicationPool
+    )
+ 
+function ConvertAppPoolState {
+    param(
+        [int] $value
+    )
+    switch($value)
+    {
+        0 { "Starting"; break }
+        1 { "Started"; break }
+        2 { "Stopping"; break }
+        3 { "Stopped"; break }
+        default { "Unknown"; break }
+    }
+}
+ 
+#
+# Stops and restarts the specified application pool on the specified machine
+# https://social.technet.microsoft.com/Forums/ie/en-US/0448a533-b0ac-4ece-9f2a-7c5924df1c8b/how-to-recyle-a-particular-application-pool-in-iis-using-powershell-script-all-i-have-is-a-site?forum=winserverpowershell
+function RecycleAppPool
+{
+    param (
+        [string] $serverName,
+        [string] $applicationPool
+    )
+ 
+    # Return an app pool object
+    $aPool = Get-WmiObject -Authentication PacketPrivacy -Impersonation Impersonate -ComputerName `
+        $serverName -Namespace "root\WebAdministration" -Class "ApplicationPool" `
+            | Where-Object { $_.Name -eq "$applicationPool" }
+ 
+    # Check to make sure we actually have an object
+    if ($aPool -ne $null)
+    {
+        if ((ConvertAppPoolState ($aPool.GetState() | Select-Object -ExpandProperty ReturnValue)) -eq "Started")
+        {
+            Write-Host -ForegroundColor Green "Attempting to Stop Application Pool: $applicationPool on Server: $server"
+            $aPool.Stop()
+ 
+            $stopper = 0
+            While (((ConvertAppPoolState ($aPool.GetState() | Select-Object -ExpandProperty ReturnValue)) -eq "Stopping"))
+            {
+                Write-Host -ForegroundColor Yellow "Stopping...."
+                $stopper++
+                Start-Sleep 5
+ 
+                if ($stopper -eq 10)
+                {
+                    Write-Host -ForegroundColor Red "There was an issue with stopping the Application Pool $applicationPool."
+                    exit
+                }
+            }
+ 
+            if ((ConvertAppPoolState ($aPool.GetState() | Select-Object -ExpandProperty ReturnValue)) -eq "Stopped")
+            {
+                Write-Host -ForegroundColor Green "Application Pool: $applicationPool on Server: $server has been stopped"
+            }
+        }
+ 
+        if ((ConvertAppPoolState ($aPool.GetState() | Select-Object -ExpandProperty ReturnValue)) -eq "Stopped")
+        {
+            Write-Host -ForegroundColor Green "Attempting to Start Application Pool: $applicationPool on Server: $server"
+            $aPool.Start()
+ 
+            if ((ConvertAppPoolState ($aPool.GetState() | Select-Object -ExpandProperty ReturnValue)) -eq "Started")
+            {
+                Write-Host -ForegroundColor Green "Application Pool: $applicationPool on Server: $server has been started"
+            }
+        }
+    }
+    else
+    {
+        Write-Host -ForegroundColor Red "There was an error trying to recycle app pool: $applicationPool on server: $serverName, " `
+            + "please ensure the names are entered correctly."
+    }
+}
+ 
+RecycleAppPool -serverName $ServerName -applicationPool $ApplicationPool
